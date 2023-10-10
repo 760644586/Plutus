@@ -1,7 +1,3 @@
-# Plutus Bitcoin Brute Forcer
-# Made by Isaac Delly
-# https://github.com/Isaacdelly/Plutus
-
 from fastecdsa import keys, curve
 from ellipticcurve.privateKey import PrivateKey
 import platform
@@ -11,19 +7,23 @@ import binascii
 import os
 import sys
 import time
+import torch
+
 
 DATABASE = r'database/11_13_2022/'
 
 def generate_private_key():
     return binascii.hexlify(os.urandom(32)).decode('utf-8').upper()
 
+
 def private_key_to_public_key(private_key, fastecdsa):
     if fastecdsa:
-        key = keys.get_public_key(int('0x' + private_key, 0), curve.secp256k1)
-        return '04' + (hex(key.x)[2:] + hex(key.y)[2:]).zfill(128)
+        key = curve.PrivateKey(int(private_key, 16), curve=curve.secp256k1)
+        return '04' + (hex(key.public_key.x)[2:] + hex(key.public_key.y)[2:]).zfill(128)
     else:
         pk = PrivateKey().fromString(bytes.fromhex(private_key))
         return '04' + pk.publicKey().toString().hex().upper()
+
 
 def public_key_to_address(public_key):
     output = []
@@ -39,8 +39,10 @@ def public_key_to_address(public_key):
     while n > 0:
         n, remainder = divmod(n, 58)
         output.append(alphabet[remainder])
-    for i in range(count): output.append(alphabet[0])
+    for i in range(count):
+        output.append(alphabet[0])
     return ''.join(output[::-1])
+
 
 def private_key_to_wif(private_key):
     digest = hashlib.sha256(binascii.unhexlify('80' + private_key)).hexdigest()
@@ -49,20 +51,27 @@ def private_key_to_wif(private_key):
     alphabet = chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
     value = pad = 0
     result = ''
-    for i, c in enumerate(var[::-1]): value += 256**i * c
+    for i, c in enumerate(var[::-1]):
+        value += 256**i * c
     while value >= len(alphabet):
         div, mod = divmod(value, len(alphabet))
         result, value = chars[mod] + result, div
     result = chars[value] + result
     for c in var:
-        if c == 0: pad += 1
-        else: break
+        if c == 0:
+            pad += 1
+        else:
+            break
     return chars[0] * pad + result
+	
 
 def main(database, args):
+	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # 检查是否有可用的GPU
+	
     while True:
         private_key = generate_private_key()
-        public_key = private_key_to_public_key(private_key, args['fastecdsa']) 
+		private_key_tensor = torch.tensor(int(private_key, 16), device=device)  # 将私钥加载到GPU上
+        public_key = private_key_to_public_key(private_key_tensor, args['fastecdsa'])
         address = public_key_to_address(public_key)
 
         if args['verbose']:
@@ -79,36 +88,18 @@ def main(database, args):
                                          'uncompressed address: ' + str(address) + '\n\n')
                         break
 
-def print_help():
-    print('''Plutus homepage: https://github.com/Isaacdelly/Plutus
-Plutus QA support: https://github.com/Isaacdelly/Plutus/issues
-
-
-Speed test: 
-execute 'python3 plutus.py time', the output will be the time it takes to bruteforce a single address in seconds
-
-
-Quick start: run command 'python3 plutus.py'
-
-By default this program runs with parameters:
-python3 plutus.py verbose=0 substring=8
-
-verbose: must be 0 or 1. If 1, then every bitcoin address that gets bruteforced will be printed to the terminal. This has the potential to slow the program down. An input of 0 will not print anything to the terminal and the bruteforcing will work silently. By default verbose is 0.
-
-substring: to make the program memory efficient, the entire bitcoin address is not loaded from the database. Only the last <substring> characters are loaded. This significantly reduces the amount of RAM required to run the program. if you still get memory errors then try making this number smaller, by default it is set to 8. This opens us up to getting false positives (empty addresses mistaken as funded) with a probability of 1/(16^<substring>), however it does NOT leave us vulnerable to false negatives (funded addresses being mistaken as empty) so this is an acceptable compromise.
-
-cpu_count: number of cores to run concurrently. More cores = more resource usage but faster bruteforcing. Omit this parameter to run with the maximum number of cores''')
-    sys.exit(0)
 
 def timer(args):
     start = time.time()
     private_key = generate_private_key()
-    public_key = private_key_to_public_key(private_key, args['fastecdsa'])
+    private_key_tensor = torch.tensor(int(private_key, 16), device=device)
+    public_key = private_key_to_public_key(private_key_tensor, args['fastecdsa'])
     address = public_key_to_address(public_key)
     end = time.time()
     print(str(end - start))
     sys.exit(0)
-
+	
+	
 if __name__ == '__main__':
     args = {
         'verbose': 0,
@@ -116,6 +107,7 @@ if __name__ == '__main__':
         'fastecdsa': platform.system() in ['Linux', 'Darwin'],
         'cpu_count': multiprocessing.cpu_count(),
     }
+
     
     for arg in sys.argv[1:]:
         command = arg.split('=')[0]
