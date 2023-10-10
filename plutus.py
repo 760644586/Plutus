@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import torch
+import torch.nn as nn
 
 
 DATABASE = r'database/11_13_2022/'
@@ -71,8 +72,10 @@ def main(database, args):
     while True:
         private_key = generate_private_key()
 		private_key_tensor = torch.tensor(int(private_key, 16), device=device)  # 将私钥加载到GPU上
-        public_key = private_key_to_public_key(private_key_tensor, args['fastecdsa'])
-        address = public_key_to_address(public_key)
+        # 异步计算公钥和地址
+        with torch.cuda.stream(torch.cuda.current_stream()):
+            public_key = private_key_to_public_key(private_key_tensor, args['fastecdsa'])
+            address = public_key_to_address(public_key)
 
         if args['verbose']:
             print(address)
@@ -87,14 +90,18 @@ def main(database, args):
                                          'public key: ' + str(public_key) + '\n' +
                                          'uncompressed address: ' + str(address) + '\n\n')
                         break
+        # 释放不再使用的GPU内存
+        torch.cuda.empty_cache()
 
 
 def timer(args):
     start = time.time()
     private_key = generate_private_key()
     private_key_tensor = torch.tensor(int(private_key, 16), device=device)
-    public_key = private_key_to_public_key(private_key_tensor, args['fastecdsa'])
-    address = public_key_to_address(public_key)
+    # 异步计算公钥和地址
+    with torch.cuda.stream(torch.cuda.current_stream()):
+        public_key = private_key_to_public_key(private_key_tensor, args['fastecdsa'])
+        address = public_key_to_address(public_key)
     end = time.time()
     print(str(end - start))
     sys.exit(0)
@@ -107,6 +114,11 @@ if __name__ == '__main__':
         'fastecdsa': platform.system() in ['Linux', 'Darwin'],
         'cpu_count': multiprocessing.cpu_count(),
     }
+    # 如果有多个GPU，使用DataParallel来并行计算
+    if torch.cuda.device_count() > 1:
+        print("使用多个GPU进行计算...")
+        model = YourModel().to(device)
+        model = nn.DataParallel(model)
 
     
     for arg in sys.argv[1:]:
